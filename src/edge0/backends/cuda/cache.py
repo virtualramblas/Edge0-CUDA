@@ -1,5 +1,6 @@
 import torch
 from edge0.backends.base import BaseExpertCache
+from edge0.backends.cuda.gds_loader import GDSExpertLoader
 
 class CudaStreamingExpertCache(BaseExpertCache):
     """
@@ -63,3 +64,37 @@ class CudaStreamingExpertCache(BaseExpertCache):
     def get_expert_weights(self, expert_id: int) -> torch.Tensor:
         slot_idx = self.slot_map[expert_id]
         return self.device_slots[slot_idx]
+
+class GDSStreamingExpertCache:
+    def __init__(self, num_slots: int, expert_shape: Tuple[int, ...], loader: GDSExpertLoader):
+        self.num_slots = num_slots
+        self.loader = loader
+        
+        # Pre-allocate pinned GPU slots
+        self.gpu_slots = torch.empty((num_slots, *expert_shape), dtype=torch.bfloat16, device="cuda:0")
+        
+        # Async tracking handles
+        self.io_futures = {}
+        self.slot_map = {}
+
+    def trigger_prerouter_load(self, expert_id: int):
+        """Called 1-2 layers ahead by the lookahead router."""
+        slot_idx = expert_id % self.num_slots
+        self.slot_map[expert_id] = slot_idx
+        
+        # Dispatch DMA transfer directly from NVMe to GPU slot
+        future = self.loader.read_expert_to_gpu_async(
+            expert_id=expert_id,
+            target_gpu_tensor=self.gpu_slots[slot_idx]
+        )
+        self.io_futures[expert_id] = future
+
+    def wait_for_expert(self, expert_id: int) -> torch.Tensor:
+        """Called when MoE compute kernel is about to execute."""
+        if expert_id in self.io_futures:
+            # Wait for DMA hardware transfer completion
+            self.io_futures[expert_id].get()
+            del self.io_futures[expert_id]
+            
+        slot_idx = self.slot_map[expert_id]
+        return self.gpu_slots[slot_idx]
