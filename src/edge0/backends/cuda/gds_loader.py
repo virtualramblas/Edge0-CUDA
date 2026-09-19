@@ -2,7 +2,7 @@ import os
 import torch
 from typing import Dict, Tuple, Optional
 import kvikio
-from kvikio import CuFile
+from kvikio.cufile import IOFuture  # 📍 CORRECTED FUTURE IMPORT
 
 class GDSExpertLoader:
     """
@@ -18,19 +18,19 @@ class GDSExpertLoader:
         self.device = device
         self.checkpoint_path = checkpoint_path
         self.expert_manifest = expert_manifest
-        
+
         # Verify if GPUDirect Storage driver (nvidia-fs) is active
         self.gds_active = kvikio.defaults.compat_mode() is False
         print(f"[*] Edge0 GDS Loader initialized. Driver Direct DMA Active: {self.gds_active}")
-        
+
         # Open file with direct IO semantics (O_DIRECT)
-        self.file_handle = CuFile(self.checkpoint_path, flags="r")
+        self.file_handle = kvikio.CuFile(self.checkpoint_path, flags="r")
 
     def read_expert_to_gpu_async(
         self,
         expert_id: int,
         target_gpu_tensor: torch.Tensor
-    ) -> kvikio.Future:
+    ) -> IOFuture:  # 📍 CORRECTED TYPE ANNOTATION
         """
         Asynchronously streams expert bytes directly into GPU tensor memory via cuFile.
         Bypasses CPU host RAM completely.
